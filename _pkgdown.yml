@@ -1,0 +1,112 @@
+url: https://esi.saketlab.org
+
+development:
+  mode: release
+
+template:
+  bootstrap: 5
+  light-switch: true
+  preset: default
+  bslib:
+    primary: "#0071e3"
+    border-radius: "0.5rem"
+  includes:
+    in_header: |
+      <link rel="stylesheet" href="extra.css">
+      <meta name="keywords" content="NSS, National Sample Survey, CMS-E, Comprehensive Modular Survey on Education, education expenditure, school enrolment, private coaching, India, MoSPI, microdata, R package, DuckDB, Parquet">
+      <meta name="author" content="Saket Choudhary">
+      <meta name="robots" content="index, follow">
+
+home:
+  title: "educationsurveyindia - NSS Education Survey Microdata for R"
+  description: >
+    R package for India's NSS education surveys: query the 80th round
+    Comprehensive Modular Survey on Education (CMS-E, 2025) via DuckDB and
+    Parquet, and download every education round from 1986-87 to 2025 from
+    the MoSPI microdata portal.
+
+  links:
+  - text: Browse source code
+    href: https://github.com/saketkc/educationsurveyindia
+  - text: Report a bug
+    href: https://github.com/saketkc/educationsurveyindia/issues
+
+navbar:
+  structure:
+    left:  [intro, reference, articles, news]
+    right: [search, github, lightswitch]
+
+  components:
+    reference:
+      text: Reference
+      href: reference/index.html
+
+    articles:
+      text: Articles
+      menu:
+      - text: Building the CMS-E Parquet data
+        href: articles/building-the-data.html
+      - text: Expenditure inequality in CMS-E
+        href: articles/articles/expenditure-inequality.html
+
+    news:
+      text: Changelog
+      href: news/index.html
+
+    github:
+      icon: fab fa-github fa-lg
+      href: https://github.com/saketkc/educationsurveyindia
+      aria-label: GitHub
+
+reference:
+- title: "Download & build"
+  desc: "Download NSS education rounds and build CMS-E into Parquet + labels.duckdb"
+  contents:
+  - esi_surveys
+  - esi_download_all
+  - esi_download
+  - esi_build
+  - esi_cli
+
+- title: "Connect"
+  contents:
+  - esi_connect
+  - esi_disconnect
+  - esi_tables
+  - esi_example_data
+
+- title: "Query"
+  contents:
+  - esi_available_data
+  - esi_school_participation
+  - esi_expenditure_by_state
+  - esi_expenditure_by_category
+  - esi_coaching
+  - esi_state_household_summary
+
+- title: "Variable & value labels"
+  contents:
+  - esi_find
+  - esi_search_vars
+  - esi_value_labels
+  - esi_decode
+  - esi_class_label
+
+- title: "Geography"
+  contents:
+  - ESI_STATE_CODES
+  - esi_normalize_state
+  - esi_by_state
+  - esi_attach_geometry
+
+authors:
+  Saket Choudhary:
+    href: https://github.com/saketkc
+
+footer:
+  structure:
+    left: developed_by
+    right: built_with
+  components:
+    developed_by: "Developed by [Saket Lab](https://saketlab.org)"
+    built_with: "Built with [pkgdown](https://pkgdown.r-lib.org/)"

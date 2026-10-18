@@ -1,0 +1,49 @@
+Package: educationsurveyindia
+Title: Access Indian National Sample Survey Education Microdata
+Version: 0.1.0
+Authors@R:
+    person("Saket", "Choudhary", , "saketc@iitb.ac.in", role = c("aut", "cre", "cph"),
+           comment = c(ORCID = "0000-0001-5202-7633"))
+Description: Query India's National Sample Survey (NSS) 80th round
+    Comprehensive Modular Survey on Education (CMS-E, 2025) unit-level
+    microdata on household, person and erstwhile-member education
+    participation and expenditure, through 'DuckDB' views over 'Parquet'
+    files built from the official release. Also downloads every NSS
+    education survey round (1986-87 to 2025) from the Ministry of
+    Statistics and Programme Implementation ('MoSPI') microdata portal
+    <https://microdata.gov.in>.
+License: MIT + file LICENSE
+URL: https://esi.saketlab.org, https://github.com/saketkc/educationsurveyindia
+BugReports: https://github.com/saketkc/educationsurveyindia/issues
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Depends: R (>= 4.1.0)
+Imports:
+    cli,
+    DBI,
+    dplyr,
+    duckdb,
+    rlang,
+    tibble
+Suggests:
+    arrow,
+    dbplyr,
+    ggplot2,
+    haven,
+    knitr,
+    mospiR,
+    readxl,
+    rmarkdown,
+    scales,
+    sf,
+    showtext,
+    survey,
+    sysfonts,
+    testthat (>= 3.0.0),
+    tidyr,
+    withr
+VignetteBuilder: knitr
+Additional_repositories: https://saketlab.r-universe.dev
+Config/Needs/website: arrow, ggplot2, haven, readxl, scales, sf
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.1.1

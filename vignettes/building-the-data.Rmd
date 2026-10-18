@@ -1,0 +1,235 @@
+---
+title: "Building the CMS-E Parquet Data"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Building the CMS-E Parquet Data}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+# The build needs a MOSPI API key and network access, so no chunk runs.
+knitr::opts_chunk$set(eval = FALSE, collapse = TRUE, comment = "#>")
+```
+
+The package does not include the survey microdata. You download the
+microdata one time from the MOSPI microdata portal (catalog 255, dataset
+`DDI-IND-MOSPI-NSS-CMSE80-2025`). Then you build a data directory of Parquet
+files. All the query functions of the package read this directory.
+
+You can do the build from R or from the command line. The two methods run
+the same code.
+
+## Before you start
+
+1. Get an API key from <https://microdata.gov.in>.
+
+2. Add the key to `~/.Renviron`:
+
+   ```
+   MOSPI_KEY=your-key-here
+   ```
+
+3. Start R again. R reads the key when it starts.
+
+4. Install the packages for the build:
+
+   ```{r}
+   install.packages("mospiR", repos = c("https://saketlab.r-universe.dev", getOption("repos")))
+   install.packages(c("arrow", "haven", "readxl"))
+   ```
+
+## The data directory
+
+All the functions use one data directory. The default directory is
+`tools::R_user_dir("educationsurveyindia", "data")`.
+
+To use a different directory, set the `esi.data_dir` option in `~/.Rprofile`:
+
+```{r}
+options(esi.data_dir = "~/data/education")
+```
+
+`esi_build()`, `esi_download()`, `esi_download_all()`, `esi_connect()`, and
+`esi info` use this option. In this article, `<data dir>` is the data directory.
+
+## Build from R
+
+```{r}
+library(educationsurveyindia)
+esi_build()
+```
+
+```
+#> ℹ Downloading "DDI-IND-MOSPI-NSS-CMSE80-2025" from microdata.gov.in...
+#> Downloaded: <data dir>/raw/Data in STATA.zip (8,493,471 bytes)
+#> Downloaded: <data dir>/raw/CODEs for Blocks of Sch - CMS-Education.xlsx (19,480 bytes)
+#> ℹ Reading 'CMSE80HH25.dta'
+#> ✔  "household": 52085 rows, 33 cols
+#> ℹ Reading 'CMSE80PER25.dta'
+#> ✔  "person": 221617 rows, 40 cols
+#> ℹ Reading 'CMSE80PERST25.dta'
+#> ✔  "person_erstwhile": 1675 rows, 30 cols
+#> ✔ Build complete. Output: '<data dir>'
+```
+
+The download is approximately 8.5 MB. After the download, the build is
+complete in less than one minute.
+
+To write the data to a different directory, use `output_dir`:
+
+```{r}
+esi_build(output_dir = "/data/cmse")
+```
+
+### Download only
+
+`esi_download()` downloads and extracts the raw files. It does not build
+the Parquet files.
+
+```{r}
+esi_download()                  # into <data dir>/raw
+esi_download("/data/cmse/raw")
+```
+
+### Use files that you downloaded
+
+If you downloaded `Data in STATA.zip` from the portal, set `raw_dir` to its
+directory. The directory can also contain the extracted `.dta` files. An
+API key is not necessary for this method.
+
+```{r}
+esi_build(raw_dir = "~/Downloads/cmse")
+```
+
+Put `CODEs for Blocks of Sch - CMS-Education.xlsx` in the same directory.
+This codebook gives the correct value labels. If the codebook is missing,
+the build uses the STATA value labels and shows a warning. Some STATA value
+labels are not correct, for example the labels of `sector`.
+
+## Download all the education rounds
+
+CMS-E is the newest of seven NSS education surveys on the portal.
+`esi_surveys()` shows the seven surveys:
+
+```{r}
+esi_surveys()
+```
+
+`esi_download_all()` downloads all the files of each round. The files are
+the microdata in each format, the DDI codebook, the questionnaires, the
+reports, and the code lists. Each round goes into `<data dir>/rounds/`.
+
+```{r}
+res <- esi_download_all()                 # all rounds, less than 1 GB
+esi_download_all(rounds = c("64", "75"))  # only these rounds
+res$missing                               # the files that did not download
+```
+
+The function does not download a file again if the file is on your
+computer. Thus, if a download stops, run the function again. It downloads
+only the missing files.
+
+The portal API cannot give the files of the 52nd round. The dataset ID of
+this round ends with a period, and the API does not accept this ID. Download
+this round from catalog page 82 of the portal.
+
+Only the 80th round can become Parquet files. The other rounds stay as raw files.
+
+## Build from the command line
+
+The package installs a script with the name `esi`. To use the script,
+make a link to it in a directory on your `PATH`:
+
+```{bash}
+ln -s "$(Rscript -e 'cat(system.file("exec", "esi", package = "educationsurveyindia"))')" ~/.local/bin/esi
+```
+
+Then use these commands:
+
+```{bash}
+esi build                              # download if necessary, then build
+esi build --output-dir /data/cmse      # build into a different directory
+esi build --raw-dir ~/Downloads/cmse   # use files that you downloaded
+esi download                           # download and extract only
+esi info                               # show the tables that you built
+esi help
+```
+
+`esi info` shows the tables and the row counts:
+
+```
+#> ✔ Connected to CMS-E data in '<data dir>'
+#> ℹ 3 tables registered
+#> # A tibble: 3 × 3
+#>   table_name       n_records n_states
+#>   <chr>                <dbl>    <dbl>
+#> 1 household            52085       36
+#> 2 person_erstwhile      1675       34
+#> 3 person              221617       36
+```
+
+If you do not make the link, use `Rscript` to run the same commands:
+
+```{bash}
+Rscript -e 'educationsurveyindia::esi_cli()' build
+```
+
+The command line reads the API key only from `MOSPI_KEY`. There is no
+`--api-key` option. Thus the key does not go into your shell history or the
+process list.
+
+If a command does not complete correctly, the exit status is 1. Thus you can use the commands in
+scripts, for example `esi build && Rscript analysis.R`.
+
+## Build again
+
+The build does not download a raw file again if the file is in the raw
+directory. Thus a second `esi_build()` or `esi build` only builds the
+Parquet files again.
+
+To download new copies of the files, use `overwrite`. Do this if MOSPI
+changes the data, or if a download stopped before the end.
+
+```{r}
+esi_build(overwrite = TRUE)
+```
+
+```{bash}
+esi build --overwrite
+```
+
+## The output files
+
+The build writes these files:
+
+```
+<data dir>/
+├── household.parquet
+├── person.parquet
+├── person_erstwhile.parquet
+├── labels.duckdb            # variable labels and value labels
+└── raw/                     # downloaded zip file, codebook, .dta files
+```
+
+The build adds two columns to each table:
+
+- `weight`: the final survey weight, `mult / 100`.
+- `state`: the NSS state code, the first two digits of `nss_region`.
+
+## Connect to the data
+
+```{r}
+con <- esi_connect()
+esi_available_data(con)
+esi_disconnect(con)
+```
+
+To try the functions without the microdata, use `esi_example_data()`. This
+function writes a very small synthetic data directory:
+
+```{r}
+con <- esi_connect(esi_example_data())
+esi_expenditure_by_state(con)
+esi_disconnect(con)
+```

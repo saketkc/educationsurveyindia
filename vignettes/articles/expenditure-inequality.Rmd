@@ -1,0 +1,497 @@
+---
+title: "Expenditure Inequality in CMS-E"
+output:
+  rmarkdown::html_vignette:
+    self_contained: true
+vignette: >
+  %\VignetteIndexEntry{Expenditure Inequality in CMS-E}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE, comment = "#>",
+  fig.width = 7, fig.height = 5, dpi = 150
+)
+
+# pkgdown renders from vignettes/articles/, so the data goes to vignettes/articles/data
+data_dir <- "data"
+have_data <- file.exists(file.path(data_dir, "person.parquet"))
+knitr::opts_chunk$set(eval = have_data || nzchar(Sys.getenv("MOSPI_KEY")))
+```
+
+```{r no-key, eval = !knitr::opts_chunk$get("eval"), echo = FALSE, results = "asis"}
+cat(
+  "> There was no `MOSPI_KEY` when this article was built.",
+  "Thus, the article shows the code without output.\n"
+)
+```
+
+This article shows how education expenditure in India changes with state,
+district, location, gender, class, and private coaching. The data is the NSS
+80th round Comprehensive Modular Survey on Education (CMS-E, 2025).
+
+All the values are weighted means of annual expenditure per student, in
+rupees (Rs). The population is students who are currently enrolled in school.
+Total expenditure is school expenditure plus private coaching expenditure.
+
+## Get the data
+
+You must have an API key for the
+[MoSPI Microdata Portal](https://microdata.gov.in). Set the environment
+variable `MOSPI_KEY` in `~/.Renviron`. The download is approximately 8.5 MB.
+
+```{r setup}
+library(educationsurveyindia)
+library(ggplot2)
+library(scales)
+
+if (!file.exists(file.path(data_dir, "person.parquet"))) {
+  esi_build(output_dir = data_dir)
+}
+con <- esi_connect(data_dir)
+```
+
+This article removes a value if the group has less than `MIN_N` students.
+Cells of a heatmap use the smaller `MIN_N_CELL`.
+
+```{r helpers}
+MIN_N <- 30
+MIN_N_CELL <- 15
+rs <- label_dollar(prefix = "Rs ", big.mark = ",", accuracy = 1)
+blue <- "#2a78d6"
+orange <- "#eb6834"
+
+# Replace codes with labels, for example sector "1" with "rural"
+decode <- function(d, col) {
+  d[[col]] <- esi_decode(con, "person", col, d[[col]])
+  d
+}
+
+# Ratio of the mean of group `num` to the mean of group `den` in column `col`
+gap <- function(d, col, num, den, keys, min_n = MIN_N) {
+  m <- merge(d[d[[col]] == num, ], d[d[[col]] == den, ], by = keys)
+  m$ratio <- m$mean_total_expenditure.x / m$mean_total_expenditure.y
+  m$ratio[pmin(m$n_students.x, m$n_students.y) < min_n] <- NA
+  m[c(keys, "ratio")]
+}
+
+# Limits of a log scale that put a ratio of 1 at the center of the palette
+symmetric <- function(l) 2^(c(-1, 1) * max(abs(log2(l)), na.rm = TRUE))
+
+state_map <- function(state_name, value, name, labels = waiver(), ...) {
+  ggplot(esi_attach_geometry(data.frame(state = state_name, value = value))) +
+    geom_sf(aes(fill = value), color = "white", linewidth = 0.2) +
+    scale_fill_distiller(palette = "Spectral", labels = labels, name = name, na.value = "grey85", ...) +
+    theme_void()
+}
+
+# School classes only: the diploma courses have too few students for a heatmap
+school_class <- function(code) {
+  cl <- esi_class_label(code)
+  factor(cl, levels = grep("Diploma", levels(cl), value = TRUE, invert = TRUE))
+}
+
+# Rows with no value are removed
+heatmap <- function(d, x, y, fill) {
+  d <- d[d[[y]] %in% d[[y]][!is.na(d[[fill]])], ]
+  ggplot(d, aes(.data[[x]], .data[[y]], fill = .data[[fill]])) +
+    geom_tile(color = "white") +
+    labs(x = NULL, y = NULL) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), panel.grid = element_blank())
+}
+```
+
+## National mean
+
+```{r national}
+national <- esi_expenditure_by_state(con, by = NULL)
+national
+```
+
+Do not calculate the national mean from the state means and the record
+counts. The record counts are not survey weights.
+
+## By state
+
+`ESI_STATE_CODES` gives the state name for each NSS state code.
+
+```{r by-state}
+by_state <- esi_expenditure_by_state(con)
+by_state$state_name <- ESI_STATE_CODES[by_state$state]
+by_state <- by_state[by_state$n_students >= MIN_N, ]
+```
+
+The error bars are an approximate 95% interval. The standard error is the
+weighted standard deviation divided by the square root of the number of
+students. It is not a design-based standard error, because it does not use
+the strata and the first-stage units of the survey.
+
+```{r by-state-se}
+se <- DBI::dbGetQuery(con, "
+  WITH x AS (
+    SELECT state, weight,
+      COALESCE(school_exp_total, 0) + COALESCE(private_coaching_exp_total, 0) AS total
+    FROM person WHERE currently_enrolled_school = '1'
+  ), m AS (
+    SELECT state, SUM(total * weight) / SUM(weight) AS mean, COUNT(*) AS n FROM x GROUP BY state
+  )
+  SELECT state, SQRT(SUM(weight * POWER(total - mean, 2)) / SUM(weight) / ANY_VALUE(n)) AS se
+  FROM x JOIN m USING (state)
+  GROUP BY state
+")
+by_state$se <- se$se[match(by_state$state, se$state)]
+```
+
+```{r by-state-plot, fig.height = 8}
+ggplot(by_state, aes(mean_total_expenditure, reorder(state_name, mean_total_expenditure))) +
+  geom_col(fill = blue) +
+  geom_errorbar(aes(
+    xmin = pmax(0, mean_total_expenditure - 1.96 * se),
+    xmax = mean_total_expenditure + 1.96 * se
+  ), orientation = "y", width = 0.3, linewidth = 0.3) +
+  geom_vline(xintercept = national$mean_total_expenditure, linetype = "dashed", color = "grey40") +
+  scale_x_continuous(labels = rs, expand = expansion(mult = c(0, 0.05))) +
+  labs(
+    x = "Mean expenditure (Rs/year)", y = NULL,
+    title = "Education expenditure by state",
+    subtitle = "Dashed line: national mean. Error bars: approximate 95% interval"
+  ) +
+  theme_minimal()
+```
+
+`esi_attach_geometry()` adds the state boundaries for a map. It downloads
+the boundaries from bharatviz.org.
+
+```{r by-state-map, fig.height = 7}
+state_map(by_state$state_name, by_state$mean_total_expenditure, "Rs/year", rs, transform = "log10") +
+  labs(title = "Mean education expenditure", subtitle = "Grey: no data or less than MIN_N students")
+```
+
+The highest and the lowest states:
+
+```{r state-extremes}
+ext <- by_state[c(which.max(by_state$mean_total_expenditure), which.min(by_state$mean_total_expenditure)), ]
+ext[, c("state_name", "n_students", "mean_total_expenditure")]
+```
+
+## By location and gender
+
+`esi_decode()` changes the codes of `sector` and `gender` to labels.
+
+```{r location-gender}
+by_sector <- decode(esi_expenditure_by_state(con, by = "sector"), "sector")
+by_sector[, c("sector", "n_students", "mean_total_expenditure")]
+
+by_gender <- decode(esi_expenditure_by_state(con, by = "gender"), "gender")
+by_gender[, c("gender", "n_students", "mean_total_expenditure")]
+```
+
+### Location and gender by state
+
+The maps show the urban mean divided by the rural mean, and the male mean
+divided by the female mean, for each state. A value of 1 is no difference.
+A ratio is removed if one of the two groups has less than `MIN_N` students.
+
+```{r gap-by-state}
+sector_state <- decode(esi_expenditure_by_state(con, by = c("state", "sector")), "sector")
+urban_rural <- gap(sector_state, "sector", "urban", "rural", "state")
+
+gender_state <- decode(esi_expenditure_by_state(con, by = c("state", "gender")), "gender")
+male_female <- gap(gender_state, "gender", "male", "female", "state")
+```
+
+```{r gap-maps, fig.height = 7}
+state_map(ESI_STATE_CODES[urban_rural$state], urban_rural$ratio, "Urban / rural",
+  transform = "log2", limits = symmetric, breaks = c(0.5, 1, 2, 4, 8)
+) +
+  labs(title = "Urban expenditure relative to rural expenditure")
+
+state_map(ESI_STATE_CODES[male_female$state], male_female$ratio, "Male / female",
+  transform = "log2", limits = symmetric, breaks = c(0.5, 0.75, 1, 1.5, 2)
+) +
+  labs(title = "Male expenditure relative to female expenditure")
+```
+
+## By district
+
+The `district` column is a serial number in each state. The data does not
+give the district names. Thus the district figures have no names and no map.
+Each point is one district.
+
+```{r by-district}
+by_district <- esi_expenditure_by_state(con, by = c("state", "district"))
+by_district <- by_district[by_district$n_students >= MIN_N, ]
+by_district$rank <- rank(by_district$mean_total_expenditure, ties.method = "first")
+
+ggplot(by_district, aes(rank, mean_total_expenditure)) +
+  geom_point(color = blue, size = 0.8) +
+  geom_hline(yintercept = national$mean_total_expenditure, linetype = "dashed", color = "grey40") +
+  scale_y_continuous(labels = rs, transform = "log10") +
+  labs(x = "District, in order of expenditure", y = "Mean expenditure (Rs/year)",
+    title = "Education expenditure by district",
+    subtitle = sprintf("%d districts with %d or more students. Dashed line: national mean", nrow(by_district), MIN_N)
+  ) +
+  theme_minimal()
+```
+
+## By class
+
+`esi_class_label()` puts the `enrolment_level` codes in school order. The raw
+code for pre-primary is `"15"`. Thus, without this function, pre-primary is last.
+
+```{r by-class}
+by_class <- esi_expenditure_by_state(con, by = "enrolment_level")
+by_class$class <- esi_class_label(by_class$enrolment_level)
+by_class <- by_class[!is.na(by_class$class), ]
+
+parts <- rbind(
+  data.frame(class = by_class$class, type = "School", value = by_class$mean_school_expenditure),
+  data.frame(class = by_class$class, type = "Private coaching", value = by_class$mean_coaching_expenditure)
+)
+parts$type <- factor(parts$type, levels = c("Private coaching", "School"))
+
+ggplot(parts, aes(class, value, fill = type)) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(values = c(School = blue, `Private coaching` = orange), name = NULL) +
+  scale_y_continuous(labels = rs, expand = expansion(mult = c(0, 0.08))) +
+  labs(x = NULL, y = "Mean expenditure (Rs/year)", title = "Education expenditure increases with class") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
+```
+
+### Gender gap by class and location
+
+The plot shows the female mean divided by the male mean for each class. A
+value of 1 is no difference.
+
+```{r gender-gap-class}
+gc <- esi_expenditure_by_state(con, by = c("sector", "enrolment_level", "gender"))
+gc <- decode(decode(gc, "sector"), "gender")
+gc_all <- decode(esi_expenditure_by_state(con, by = c("enrolment_level", "gender")), "gender")
+gc_all$sector <- "all"
+
+fm <- gap(rbind(gc, gc_all[names(gc)]), "gender", "female", "male", c("sector", "enrolment_level"))
+fm$class <- school_class(fm$enrolment_level)
+fm <- fm[!is.na(fm$class), ]
+
+ggplot(fm, aes(class, ratio, color = sector, group = sector)) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "grey40") +
+  geom_line(na.rm = TRUE) +
+  geom_point(na.rm = TRUE) +
+  scale_color_manual(values = c(all = "black", rural = "#1baf7a", urban = "#4a3aa7"), name = NULL) +
+  labs(x = NULL, y = "Female / male", title = "Female expenditure relative to male expenditure") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
+```
+
+### State and class
+
+The first heatmap shows the mean expenditure. The second heatmap shows the
+expenditure of each class relative to the mean of the state. A value of 2 is
+two times the state mean. Grey cells have less than `MIN_N_CELL` students. The
+rows are in order of the state mean.
+
+```{r state-class}
+state_order <- by_state$state_name[order(by_state$mean_total_expenditure)]
+
+sc <- esi_expenditure_by_state(con, by = c("state", "enrolment_level"))
+sc$class <- school_class(sc$enrolment_level)
+sc <- sc[!is.na(sc$class) & sc$state %in% by_state$state, ]
+sc$mean_total_expenditure[sc$n_students < MIN_N_CELL] <- NA
+state_mean <- by_state$mean_total_expenditure[match(sc$state, by_state$state)]
+sc$relative <- sc$mean_total_expenditure / state_mean
+sc$state_name <- factor(ESI_STATE_CODES[sc$state], levels = state_order)
+```
+
+```{r state-class-plot, fig.height = 9}
+heatmap(sc, "class", "state_name", "mean_total_expenditure") +
+  scale_fill_distiller(palette = "Spectral", transform = "log10", labels = rs,
+    na.value = "grey85", name = "Rs/year"
+  ) +
+  labs(title = "Expenditure by state and class")
+
+heatmap(sc, "class", "state_name", "relative") +
+  scale_fill_distiller(palette = "Spectral", transform = "log2", limits = symmetric,
+    na.value = "grey85", breaks = c(0.25, 0.5, 1, 2, 4), labels = c("0.25", "0.5", "1", "2", "4"),
+    name = "Relative to\nstate mean"
+  ) +
+  labs(title = "Expenditure by class, relative to the state mean")
+```
+
+The next heatmaps divide each state and class into rural and urban, and into
+male and female. The cells are smaller, so there are more grey cells.
+
+```{r state-class-split, fig.width = 10, fig.height = 9}
+split_heatmap <- function(col, keep) {
+  d <- decode(esi_expenditure_by_state(con, by = c("state", col, "enrolment_level")), col)
+  d$class <- school_class(d$enrolment_level)
+  d <- d[!is.na(d$class) & d$state %in% by_state$state & d[[col]] %in% keep, ]
+  d$mean_total_expenditure[d$n_students < MIN_N_CELL] <- NA
+  d[[col]] <- factor(d[[col]], levels = keep)
+  d$state_name <- factor(ESI_STATE_CODES[d$state], levels = state_order)
+  heatmap(d, "class", "state_name", "mean_total_expenditure") +
+    facet_wrap(col) +
+    scale_fill_distiller(palette = "Spectral", transform = "log10", labels = rs,
+      na.value = "grey85", name = "Rs/year"
+    )
+}
+
+split_heatmap("sector", c("rural", "urban")) + labs(title = "Expenditure by state, class, and location")
+split_heatmap("gender", c("male", "female")) + labs(title = "Expenditure by state, class, and gender")
+```
+
+## Expenditure categories
+
+`esi_expenditure_by_category()` gives the mean of each expenditure line item.
+
+```{r categories}
+category_labels <- c(
+  school_exp_course_fee = "School: course fee",
+  school_exp_transport = "School: transport",
+  school_exp_uniform = "School: uniform",
+  school_exp_textbooks_stationery = "School: textbooks and stationery",
+  school_exp_other = "School: other",
+  private_coaching_exp_course_fee = "Coaching: course fee",
+  private_coaching_exp_transport = "Coaching: transport",
+  private_coaching_exp_uniform = "Coaching: uniform",
+  private_coaching_exp_textbooks_material = "Coaching: textbooks and material",
+  private_coaching_exp_other = "Coaching: other",
+  hostel_fee_expenditure = "Hostel fee"
+)
+
+cats <- esi_expenditure_by_category(con)
+cats <- cats[order(-cats$mean_expenditure), ]
+cats$label <- category_labels[cats$category]
+knitr::kable(cats[c("label", "mean_expenditure")],
+  digits = 0, row.names = FALSE, format.args = list(big.mark = ","),
+  col.names = c("Category", "Mean annual expenditure (Rs)")
+)
+```
+
+### Categories by class
+
+The rows are in order of the national mean. The color scale is logarithmic.
+Grey cells have no expenditure.
+
+```{r category-class}
+category_heatmap <- function(by = NULL, keep = NULL) {
+  d <- esi_expenditure_by_category(con, by = c("enrolment_level", by))
+  d$class <- school_class(d$enrolment_level)
+  d <- d[!is.na(d$class), ]
+  d$mean_expenditure[d$mean_expenditure == 0] <- NA
+  d$label <- factor(category_labels[d$category], levels = rev(cats$label))
+  if (!is.null(by)) {
+    d <- decode(d, by)
+    d <- d[d[[by]] %in% keep, ]
+    d[[by]] <- factor(d[[by]], levels = keep)
+  }
+  p <- heatmap(d, "class", "label", "mean_expenditure") +
+    scale_fill_distiller(palette = "Spectral", transform = "log10", labels = rs, breaks = 10^(0:4),
+      na.value = "grey85", name = "Rs/year"
+    )
+  if (!is.null(by)) p <- p + facet_wrap(by)
+  p
+}
+
+category_heatmap() + labs(title = "Expenditure by category and class")
+```
+
+```{r category-class-split, fig.width = 10}
+category_heatmap("sector", c("rural", "urban")) + labs(title = "Expenditure by category, class, and location")
+category_heatmap("gender", c("male", "female")) + labs(title = "Expenditure by category, class, and gender")
+```
+
+## Private coaching
+
+`esi_coaching()` gives the share of students with private coaching, and the
+mean coaching expenditure of these students.
+
+```{r coaching}
+coaching <- esi_coaching(con, by = NULL)
+coaching
+
+decode(esi_coaching(con, by = "sector"), "sector")
+decode(esi_coaching(con, by = "gender"), "gender")
+```
+
+CMS-E does not record why a student gets coaching.
+Thus the data cannot show if the coaching is for entrance examinations.
+
+```{r coaching-class}
+cc <- esi_coaching(con, by = "enrolment_level")
+cc$class <- esi_class_label(cc$enrolment_level)
+cc <- cc[!is.na(cc$class), ]
+
+ggplot(cc, aes(class, coaching_rate)) +
+  geom_col(fill = blue, width = 0.7) +
+  scale_y_continuous(labels = label_percent(), expand = expansion(mult = c(0, 0.08))) +
+  labs(x = NULL, y = "Students with private coaching", title = "Private coaching increases with class") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r coaching-class-table}
+knitr::kable(cc[order(cc$class), c("class", "n_students", "coaching_rate", "mean_coaching_expenditure_coached")],
+  digits = c(0, 0, 3, 0), row.names = FALSE, format.args = list(big.mark = ","),
+  col.names = c("Class", "Students", "Coaching rate", "Mean expenditure if coached (Rs)")
+)
+```
+
+### Coaching by state
+
+```{r coaching-state, fig.height = 8}
+cs <- esi_coaching(con)
+cs$state_name <- ESI_STATE_CODES[cs$state]
+cs <- cs[cs$n_students >= MIN_N, ]
+
+ggplot(cs, aes(coaching_rate, reorder(state_name, coaching_rate))) +
+  geom_col(fill = blue) +
+  scale_x_continuous(labels = label_percent(), expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Students with private coaching", y = NULL, title = "Private coaching by state") +
+  theme_minimal()
+```
+
+```{r coaching-map, fig.height = 7}
+state_map(cs$state_name, cs$coaching_rate, "Coached", label_percent()) +
+  labs(title = "Students with private coaching")
+```
+
+The heatmap shows the coaching rate for each state and class. The rows are
+in order of the state coaching rate. Grey cells have less than `MIN_N_CELL`
+students.
+
+```{r coaching-state-class, fig.height = 9}
+csc <- esi_coaching(con, by = c("state", "enrolment_level"))
+csc$class <- school_class(csc$enrolment_level)
+csc <- csc[!is.na(csc$class) & csc$state %in% cs$state, ]
+csc$coaching_rate[csc$n_students < MIN_N_CELL] <- NA
+csc$state_name <- factor(ESI_STATE_CODES[csc$state], levels = cs$state_name[order(cs$coaching_rate)])
+
+heatmap(csc, "class", "state_name", "coaching_rate") +
+  scale_fill_distiller(palette = "Spectral", labels = label_percent(), na.value = "grey85", name = "Coached") +
+  labs(title = "Private coaching by state and class")
+```
+
+### Coaching by district
+
+```{r coaching-district}
+cd <- esi_coaching(con, by = c("state", "district"))
+cd <- cd[cd$n_students >= MIN_N, ]
+cd$rank <- rank(cd$coaching_rate, ties.method = "first")
+
+ggplot(cd, aes(rank, coaching_rate)) +
+  geom_point(color = blue, size = 0.8) +
+  scale_y_continuous(labels = label_percent()) +
+  labs(x = "District, in order of coaching rate", y = "Students with private coaching",
+    title = "Private coaching by district",
+    subtitle = sprintf("%d districts with %d or more students", nrow(cd), MIN_N)
+  ) +
+  theme_minimal()
+```
+
+```{r disconnect}
+esi_disconnect(con)
+```
